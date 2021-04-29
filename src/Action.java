@@ -36,7 +36,7 @@ public class Action {
         switch (actionType) {
 
             case PICK:
-                System.out.printf("PICK %d;", index);
+                System.out.printf("PICK %d", index);
                 break;
 
             case SUMMON:

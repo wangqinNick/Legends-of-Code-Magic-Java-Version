@@ -9,11 +9,16 @@ public class Agent {
     protected State state;
     protected Turn bestTurn;
     protected Timeout timeout;
+    protected ManaCurve manaCurve;
+    protected ArrayList<Card> draftedCards;
+    protected int draftTurn;
 
     public Agent() {
         state = new State();
         bestTurn = new Turn();
         timeout = new Timeout();
+        draftedCards = new ArrayList<>();
+        draftTurn = 0;
     }
 
     public void read() {
@@ -122,12 +127,29 @@ public class Agent {
         double creatureScore = 0;
         for (Card creature: state.cards) {
             switch (creature.location) {
-                case MINE: creatureScore = creatureScore + creature.attack + creature.defense; break;
-                case OPPONENT: creatureScore = creatureScore - creature.attack - creature.defense; break;
+                case MINE:
+                    double factor = 1;
+                    if (creature.ward) factor = 2;
+                    creatureScore += (creature.attack *  factor + creature.defense);
+                    if (creature.guard) creatureScore += 2;
+                    if (creature.lethal) creatureScore += 1.5;
+                    if (creature.drain) creatureScore += 1.5;
+                    if (creature.breakthrough) creatureScore += 0.7;
+                    break;
+                case OPPONENT:
+                    factor = 1;
+                    if (creature.ward) factor = 2;
+                    creatureScore -= (creature.attack *  factor + creature.defense);
+                    if (creature.guard) creatureScore -= 2;
+                    if (creature.lethal) creatureScore -= 1.5;
+                    if (creature.drain) creatureScore -= 1.5;
+                    if (creature.breakthrough) creatureScore -= 0.7;
+                    break;
                 default: break;
             }
         }
-        return hpScore + creatureScore;
+        // Log.log(String.format("%f, %f", hpScore, creatureScore));
+        return hpScore + creatureScore * 0.5;
     }
 
     public Action getRandomAction(State state) {
@@ -138,11 +160,86 @@ public class Agent {
         return actions.get(actionIndex);
     }
 
+    public void draftByCard() {
+        double bestScore = NEGATIVE_INFINITY;
+        int bestPick = -1;
+        for (int i = 0; i < ConstantField.CARDS_PER_DRAFT; i++) {
+            Card card = state.cards.get(i);
+            double cardScore = 0;
+            double factor = 1;
+            switch (card.cardType) {
+                case CREATURE:  // Creature
+                    if (card.ward) factor = 1.5;
+                    cardScore += (card.attack + card.defense) * factor - 2 * card.cost;
+                    if (card.guard) cardScore += 2;
+                    if (card.lethal) cardScore += (5 - card.cost);
+                    if (card.charge) cardScore += 1;
+                    if (card.breakthrough) cardScore += 0.7;
+                    if (card.drain) cardScore += (card.attack - 2.5);
+                    cardScore += card.cardDraw * 0.5;
+                    cardScore += (card.hpChange + card.hpChangeEnemy) * 0.3;
+                    break;
+
+                default:
+                    cardScore += card.attack + card.defense - 2 * card.cost;
+                    if (card.ward) cardScore *= 2.5;
+                    if (card.guard) cardScore += 2;
+                    if (card.lethal) cardScore += (5 - card.cost);
+                    if (card.charge) cardScore += 1;
+                    if (card.breakthrough) cardScore += 0.7;
+                    if (card.drain) cardScore += (card.cost - 2.5);
+                    cardScore += card.cardDraw * 0.5;
+                    cardScore += (card.hpChange + card.hpChangeEnemy) * 0.3;
+                    break;
+            }
+            if (cardScore > bestScore) {
+                bestPick = i;
+                bestScore = cardScore;
+            }
+        }
+        assert bestPick != -1: "Invalid card pick";
+        Action action = new Action();
+        action.pick(bestPick);
+        bestTurn.actions.add(action);
+        draftedCards.add(state.cards.get(bestPick));
+        draftTurn += 1;
+    }
+
+    public void draftByCurve() {
+        manaCurve = new ManaCurve();
+        double bestScore = POSITIVE_INFINITY;
+        int bestPick = -1;
+
+        for (int i = 0; i < ConstantField.CARDS_PER_DRAFT; i++) {
+            Card card = state.cards.get(i);
+            manaCurve.computeCurve(draftedCards);
+            manaCurve.curve[card.cost] += 1;
+            if (card.cardType == CardType.CREATURE) manaCurve.creatureCount += 1;
+
+            double score = manaCurve.evaluateScore();
+
+            manaCurve.curve[card.cost] -= 1;
+            if (card.cardType == CardType.CREATURE) manaCurve.creatureCount += 1;
+            if (score < bestScore) {
+                bestScore = score;
+                bestPick = i;
+            }
+        }
+
+        assert bestPick != -1: "Invalid card pick";
+        Action action = new Action();
+        action.pick(bestPick);
+        bestTurn.actions.add(action);
+        draftedCards.add(state.cards.get(bestPick));
+        draftTurn += 1;
+    }
+
     public void think(boolean isDebugMode) {
         bestTurn.clear();
 
         if (state.isInDraft()) {
-
+            if (draftTurn <= ConstantField.DRAFT_CURVE_TURN) draftByCard();
+            else draftByCurve();
         } else {
 
             double bestScore = NEGATIVE_INFINITY;
@@ -175,6 +272,7 @@ public class Agent {
             }
         }
     }
+
     public void debug() {
         Log.log("My creatures: ");
         for (int index: state.myCreatureIndexList) {
